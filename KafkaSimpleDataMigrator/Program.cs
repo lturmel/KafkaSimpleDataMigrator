@@ -77,7 +77,7 @@ namespace KafkaSimpleDataMigrator
         static void ReadTopicContent(KafkaClusterInfo cluster, TopicMetadata topic)
         {
             Console.WriteLine($"Reading {topic.Topic} from {cluster.BootstrapServer}");
-            using (var consumer = new ConsumerBuilder<string, string>(CreateConsumerConfig(cluster)).Build())
+            using (var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(cluster)).Build())
             {
                 var cancelled = false;
                 consumer.Subscribe(topic.Topic);
@@ -124,9 +124,9 @@ namespace KafkaSimpleDataMigrator
             return topicList;
         }
 
-        static void RePublish(KafkaClusterInfo cluster, string topicName, Message<string, string> message)
+        static void RePublish(KafkaClusterInfo cluster, string topicName, Message<byte[], byte[]> message)
         {
-            using (var producer = new ProducerBuilder<string, string>(CreateProducerConfig(cluster)).Build())
+            using (var producer = new ProducerBuilder<byte[], byte[]>(CreateProducerConfig(cluster)).Build())
             {
                 var result = producer.ProduceAsync(topicName, message);
                 result.Wait();
