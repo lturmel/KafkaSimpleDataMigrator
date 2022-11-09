@@ -6,6 +6,14 @@ namespace KafkaSimpleDataMigrator.Configuration
         public string BootstrapServer { get; set; }
         public string AccessKey { get; set; }
         public string AccessSecret { get; set; }
+        public SchemaRegistryInfo SchemaRegistry { get; set; }
+    }
+
+    public sealed class SchemaRegistryInfo
+    {
+        public string Url { get; set; }
+        public string ApiKey { get; set; }
+        public string ApiSecret { get; set; }
     }
 
     public sealed class TopicRenamePattern

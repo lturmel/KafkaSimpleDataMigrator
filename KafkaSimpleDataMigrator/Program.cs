@@ -5,6 +5,9 @@ using Microsoft.Extensions.Configuration;
 using Confluent.Kafka;
 using KafkaSimpleDataMigrator.Configuration;
 
+using Confluent.SchemaRegistry;
+using Confluent.SchemaRegistry.Serdes;
+
 namespace KafkaSimpleDataMigrator
 {
     class Program
@@ -67,6 +70,15 @@ namespace KafkaSimpleDataMigrator
             };
         }
 
+        static SchemaRegistryConfig GetSchemaRegistry(SchemaRegistryInfo schemaRegistryInfo)
+        {
+            return new SchemaRegistryConfig
+            {
+                Url = schemaRegistryInfo.Url,
+                BasicAuthUserInfo = $"{schemaRegistryInfo.ApiKey}:{schemaRegistryInfo.ApiSecret}"
+            };
+        }
+
         static string ParseDestinationTopicName(string topicName, TopicRenamePattern renamePattern)
         {
             if(topicName.StartsWith(renamePattern.RevokePattern))
@@ -77,34 +89,32 @@ namespace KafkaSimpleDataMigrator
         static void ReadTopicContent(KafkaClusterInfo cluster, TopicMetadata topic)
         {
             Console.WriteLine($"Reading {topic.Topic} from {cluster.BootstrapServer}");
-            using (var consumer = new ConsumerBuilder<byte[], byte[]>(CreateConsumerConfig(cluster)).Build())
+            var consumer = new ConsumerBuilder<string,string>(CreateConsumerConfig(cluster)).Build();
+            var cancelled = false;
+            consumer.Subscribe(topic.Topic);
+            while (!cancelled)
             {
-                var cancelled = false;
-                consumer.Subscribe(topic.Topic);
-                while (!cancelled)
+                try
                 {
-                    try
-                    {
-                        var consumeResult = consumer.Consume(5000);
-                        if (consumeResult == null) { 
-                            cancelled = true;
-                            return;
-                        }
-                        var msg = consumeResult.Message;
-                        Console.WriteLine($"Consume -> Partition: {consumeResult.Partition.Value} - Offset: {consumeResult.Offset} - Value: {msg.Value} - TS: {msg.Timestamp.UtcDateTime.ToLongTimeString()}");
-                        RePublish(_migratorConfig.DestinationCluster, ParseDestinationTopicName(topic.Topic, _migratorConfig.TopicRenamePattern), msg);
-                    }
-                    catch (KafkaException e)
-                    {
-                        Console.WriteLine($"Commit error: {e.Error.Reason}");
-                    } catch(Exception ex)
-                    {
-                        Console.WriteLine($"{ex.Message}");
+                    var consumeResult = consumer.Consume(5000);
+                    if (consumeResult == null) { 
                         cancelled = true;
+                        return;
                     }
+                    var msg = consumeResult.Message;
+                    Console.WriteLine($"Consume -> Partition: {consumeResult.Partition.Value} - Offset: {consumeResult.Offset} - Value: {msg.Value} - TS: {msg.Timestamp.UtcDateTime.ToLongTimeString()}");
+                    RePublish(_migratorConfig.DestinationCluster, ParseDestinationTopicName(topic.Topic, _migratorConfig.TopicRenamePattern), msg);
                 }
-                consumer.Close();
+                catch (KafkaException e)
+                {
+                    Console.WriteLine($"Commit error: {e.Error.Reason}");
+                } catch(Exception ex)
+                {
+                    Console.WriteLine($"{ex.Message}");
+                    cancelled = true;
+                }
             }
+            consumer.Close();
         }
 
         static List<TopicMetadata> GetTopics(KafkaClusterInfo clusterInfo) {
@@ -124,14 +134,24 @@ namespace KafkaSimpleDataMigrator
             return topicList;
         }
 
-        static void RePublish(KafkaClusterInfo cluster, string topicName, Message<byte[], byte[]> message)
+        static void RePublish(KafkaClusterInfo cluster, string topicName, Message<string, string> message)
         {
-            using (var producer = new ProducerBuilder<byte[], byte[]>(CreateProducerConfig(cluster)).Build())
+            var jsonSerConfig = new JsonSerializerConfig
             {
-                var result = producer.ProduceAsync(topicName, message);
-                result.Wait();
-                Console.WriteLine($"    Transfered to {topicName}");
-            }
+                BufferBytes = 100,
+                AutoRegisterSchemas = false,
+                UseLatestVersion = true,
+                SubjectNameStrategy = SubjectNameStrategy.Topic
+            };
+
+            var schemaRegistry = new CachedSchemaRegistryClient(GetSchemaRegistry(cluster.SchemaRegistry));
+
+            using var producer = new ProducerBuilder<string,string>(CreateProducerConfig(cluster))
+                .SetValueSerializer(new RawJsonSerializer(schemaRegistry, jsonSerConfig))
+                .Build();
+            var result = producer.ProduceAsync(topicName, message);
+            result.Wait();
+            Console.WriteLine($"    Transfered to {topicName}");
         }
     }
 }
